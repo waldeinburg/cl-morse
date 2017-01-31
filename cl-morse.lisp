@@ -115,47 +115,59 @@
           (setf (gethash value tbl) key))))
     tbl))
 
-(defun char-to-morse (ch)
-  (multiple-value-bind (m p) (gethash (char-upcase ch) *ascii2morse*)
+(defgeneric to-morse (x))
+
+(defmethod to-morse ((x t))
+  (values x nil))
+
+;;; Notice that when a character is converted, it is impossible to distinguish
+;;; from a single character symbol. Use
+;;; (-.-._...._.-_.-._.-_-.-._-_._.-. (--.-_..-_---_-_. <symbol>))
+;;; to use characters in morse code.
+(defmethod to-morse ((x character))
+  (multiple-value-bind (m p) (gethash (char-upcase x) *ascii2morse*)
     (if p
       (values m t)
-      (values ch nil))))
+      (values x nil))))
 
-(defun string-to-morse (str)
+(defmethod to-morse ((x string))
   (block nil
-         (values
-          (apply #'concatenate
-            (cons 'string
-                  (labels ((f (lst in-word acc)
-                              (if lst
-                                (let ((ch (car lst))
-                                      (rest (cdr lst)))
-                                  (if (eql ch #\space)
-                                    (f rest nil (cons " " acc))
-                                    (multiple-value-bind (m p) (char-to-morse ch)
-                                      (if p
-                                        (let ((m-str (symbol-name m)))
-                                          (if in-word
-                                            (f rest t (nconc (list m-str "_") acc))
-                                            (f rest t (cons m-str acc))))
-                                        (return (values str nil))))))
-                                (nreverse acc))))
-                    (f (coerce str 'list) nil nil))))
-          t)))
+    (values
+     (apply #'concatenate
+       (cons 'string
+             (labels ((f (lst in-word acc)
+                         (if lst
+                           (let ((ch (car lst))
+                                 (rest (cdr lst)))
+                             (if (eql ch #\space)
+                               (f rest nil (cons " " acc))
+                               (multiple-value-bind (m p) (to-morse ch)
+                                 (if p
+                                   (let ((m-str (symbol-name m)))
+                                     (if in-word
+                                       (f rest t (list* m-str "_" acc))
+                                       (f rest t (cons m-str acc))))
+                                   (return (values x nil))))))
+                           (nreverse acc))))
+               (f (coerce x 'list) nil nil))))
+     t)))
 
-(defun symbol-to-morse (s)
-  (multiple-value-bind (m p) (string-to-morse
-                              (string-upcase (symbol-name s)))
-    (if p
-      (values (intern m) t)
-      (values s nil))))
+; For types that are converted to string and returned as symbol
+(defmacro define-stringable-to-morse (type str-conv-expr)
+  `(defmethod to-morse ((x ,type))
+     (multiple-value-bind (m p) (to-morse ,str-conv-expr)
+       (if p
+         (values (intern m) t) ; return as symbol
+         (values x nil)))))
 
-(defun lst-to-morse (lst)
-  (mapcar (lambda (x)
-            (typecase x
-              (list (lst-to-morse x))
-              (symbol (symbol-to-morse x))
-              (string (string-to-morse x))
-              (character (char-to-morse x))
-              (t x)))
-          lst))
+(define-stringable-to-morse number
+  (write-to-string x))
+
+(define-stringable-to-morse symbol
+  (string-upcase (symbol-name x)))
+
+(defmethod to-morse ((x list))
+  (mapcar #'to-morse x))
+
+(defmacro morsify (&body body)
+  `',@(to-morse body))
