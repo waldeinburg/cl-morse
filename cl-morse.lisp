@@ -1,12 +1,13 @@
 ;;; === Utilities from Paul Graham, On Lisp ===
-(defun group (source n)
-  (if (zerop n) (error "zero length"))
-  (labels ((rec (source acc)
-             (let ((rest (nthcdr n source)))
-               (if (consp rest)
-                   (rec rest (cons (subseq source 0 n) acc))
-                   (nreverse (cons source acc))))))
-    (if source (rec source nil) nil)))
+(eval-when (:compile-toplevel) ; used in macro for *morse2ascii*
+  (defun group (source n)
+    (if (zerop n) (error "zero length"))
+    (labels ((rec (source acc)
+               (let ((rest (nthcdr n source)))
+                 (if (consp rest)
+                     (rec rest (cons (subseq source 0 n) acc))
+                     (nreverse (cons source acc))))))
+      (if source (rec source nil) nil))))
 
 (defmacro aif (test-form then-form &optional else-form)
   `(let ((it ,test-form))
@@ -20,10 +21,11 @@
                                             `((gethash ',(cadr p) tbl)
                                               ,(car p)))
                                           (group pairs 2)))))
-      ; List mainly from https://en.wikipedia.org/wiki/Morse_code
-      ; All foreign characters are removed because most are shared between several characters.
-      ; A few cases (e.g. dot) cannot be represented without caracther escape or vertical pipe,
-      ; and this is applied to all cases for readability.
+      ;; List mainly from https://en.wikipedia.org/wiki/Morse_code
+      ;; All foreign characters are removed because most are shared between
+      ;; several characters.
+      ;; A few cases (e.g. dot) cannot be represented without caracther escape
+      ;; or vertical pipe, and this is applied to all cases for readability.
       (fill-tbl
        #\A |.-|
        #\B |-...|
@@ -81,6 +83,7 @@
        #\@ |.--.-.|
        #\newline |.-.-| ; http://morsecode.scphillips.com/morse2.html
        #\* |..-..| ; okay, I made this one up
+       #\space | | ; for lookup when converting char
        )
       tbl)))
 
@@ -88,11 +91,12 @@
   (gethash m-sym *morse2ascii*))
 
 (defun char-from-morse (m-str)
-  (char-from-morse (intern m-str)))
+  (char-from-morse-sym (intern m-str)))
 
 (defun string-from-morse (m-str)
   (coerce
    (labels ((f (lst cur-ch-acc acc)
+               ;; Possibly add current chars to accumulation after word end.
                (flet ((acc-cur-ch ()
                                   (if cur-ch-acc
                                     (let ((m (coerce
@@ -125,17 +129,36 @@
   (aif (string-from-morse m-str)
        (intern it)))
 
-;;; In the opposite table the values are more conveniently strings.
+(defun parse-morse (m)
+  (typecase m
+    (null nil)
+    (cons (cons (parse-morse (car m))
+                (parse-morse (cdr m))))
+    (string (string-from-morse m))
+    (symbol
+     (let* ((str (symbol-name m))
+            (get-rest (lambda () (subseq str 1)))) ; lazy
+       (case (char str 0)
+         (#\C (char-from-morse (funcall get-rest)))
+         (#\N (number-from-morse (funcall get-rest)))
+         (otherwise (symbol-from-morse str)))))))
+
+(defmacro morse-code (&body body)
+  (if (cdr body)
+      `(progn ,@(parse-morse body))
+      (parse-morse (car body))))
+
 (defparameter *ascii2morse*
   (let ((tbl (make-hash-table)))
     (with-hash-table-iterator (generator-fn *morse2ascii*)
       (loop
         (multiple-value-bind (any? key value) (generator-fn)
           (unless any? (return))
-          (setf (gethash value tbl) (symbol-name key)))))
+          (setf (gethash value tbl)
+                ;; String values are more convenient here.
+                (symbol-name key)))))
     tbl))
 
-(proclaim '(inline char-to-morse))
 (defun char-to-morse (ch)
   (gethash (char-upcase ch) *ascii2morse*))
 
