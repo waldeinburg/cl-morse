@@ -15,83 +15,80 @@
 ;;; ===========================================
 
 (defparameter *morse2ascii*
-  (let ((tbl (make-hash-table :test 'eq)))
-    (macrolet ((fill-tbl (&rest pairs)
-                         `(setf ,@(mapcan (lambda (p)
-                                            `((gethash ',(cadr p) tbl)
-                                              ,(car p)))
-                                          (group pairs 2)))))
+  (let ((tbl (make-hash-table :test 'equal)))
+    (flet ((fill-tbl (&rest pairs)
+             (mapc (lambda (p)
+                     (setf (gethash (cadr p) tbl)
+                           (car p)))
+                   (group pairs 2))))
       ;; List mainly from https://en.wikipedia.org/wiki/Morse_code
       ;; All foreign characters are removed because most are shared between
       ;; several characters.
       ;; A few cases (e.g. dot) cannot be represented without caracther escape
       ;; or vertical pipe, and this is applied to all cases for readability.
       (fill-tbl
-       #\A |.-|
-       #\B |-...|
-       #\C |-.-.|
-       #\D |-..|
-       #\E |.|
-       #\F |..-.|
-       #\G |--.|
-       #\H |....|
-       #\I |..|
-       #\J |.---|
-       #\K |-.-|
-       #\L |.-..|
-       #\M |--|
-       #\N |-.|
-       #\O |---|
-       #\P |.--.|
-       #\Q |--.-|
-       #\R |.-.|
-       #\S |...|
-       #\T |-|
-       #\U |..-|
-       #\V |...-|
-       #\W |.--|
-       #\X |-..-|
-       #\Y |-.--|
-       #\Z |--..|
-       #\0 |-----|
-       #\1 |.----|
-       #\2 |..---|
-       #\3 |...--|
-       #\4 |....-|
-       #\5 |.....|
-       #\6 |-....|
-       #\7 |--...|
-       #\8 |---..|
-       #\9 |----.|
-       #\. |.-.-.-|
-       #\, |--..--|
-       #\? |..--..|
-       #\' |.----.|
-       #\! |-.-.--|
-       #\/ |-..-.|
-       #\( |-.--.|
-       #\) |-.--.-|
-       #\& |.-...|
-       #\: |---...|
-       #\; |-.-.-.|
-       #\= |-...-|
-       #\+ |.-.-.|
-       #\- |-....-|
-       #\_ |..--.-|
-       #\" |.-..-.|
-       #\$ |...-..-|
-       #\@ |.--.-.|
-       #\newline |.-.-| ; http://morsecode.scphillips.com/morse2.html
-       #\* |..-..| ; okay, I made this one up
-       #\space | | ; for lookup when converting char
+       #\A ".-"
+       #\B "-..."
+       #\C "-.-."
+       #\D "-.."
+       #\E "."
+       #\F "..-."
+       #\G "--."
+       #\H "...."
+       #\I ".."
+       #\J ".---"
+       #\K "-.-"
+       #\L ".-.."
+       #\M "--"
+       #\N "-."
+       #\O "---"
+       #\P ".--."
+       #\Q "--.-"
+       #\R ".-."
+       #\S "..."
+       #\T "-"
+       #\U "..-"
+       #\V "...-"
+       #\W ".--"
+       #\X "-..-"
+       #\Y "-.--"
+       #\Z "--.."
+       #\0 "-----"
+       #\1 ".----"
+       #\2 "..---"
+       #\3 "...--"
+       #\4 "....-"
+       #\5 "....."
+       #\6 "-...."
+       #\7 "--..."
+       #\8 "---.."
+       #\9 "----."
+       #\. ".-.-.-"
+       #\, "--..--"
+       #\? "..--.."
+       #\' ".----."
+       #\! "-.-.--"
+       #\/ "-..-."
+       #\( "-.--."
+       #\) "-.--.-"
+       #\& ".-..."
+       #\: "---..."
+       #\; "-.-.-."
+       #\= "-...-"
+       #\+ ".-.-."
+       #\- "-....-"
+       #\_ "..--.-"
+       #\" ".-..-."
+       #\$ "...-..-"
+       #\@ ".--.-."
+       #\newline ".-.-" ; http://morsecode.scphillips.com/morse2.html
+       #\* "..-.." ; okay, I made this one up
+       #\space " " ; for lookup when converting char
        )
       tbl)))
 
-(defun char-from-morse-sym (m-sym)
-  (gethash m-sym *morse2ascii*))
-
 (defun char-from-morse (m-str)
-  (char-from-morse-sym (intern m-str)))
+  (gethash m-str *morse2ascii*))
 
 (defun string-from-morse (m-str)
   (coerce
@@ -154,9 +151,7 @@
       (loop
         (multiple-value-bind (any? key value) (generator-fn)
           (unless any? (return))
-          (setf (gethash value tbl)
-                ;; String values are more convenient here.
-                (symbol-name key)))))
+          (setf (gethash value tbl) key))))
     tbl))
 
 (defun char-to-morse (ch)
