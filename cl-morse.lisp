@@ -12,6 +12,11 @@
 (defmacro aif (test-form then-form &optional else-form)
   `(let ((it ,test-form))
      (if it ,then-form ,else-form)))
+
+(defmacro awhile (expr &body body)
+  `(do ((it ,expr ,expr))
+       ((not it))
+     ,@body))
 ;;; ===========================================
 
 (defparameter *morse2ascii*
@@ -141,9 +146,62 @@
          (otherwise (symbol-from-morse str)))))))
 
 (defmacro morse-code (&body body)
+  "Macro for writing Lisp morse code directly"
   (if (cdr body)
       `(progn ,@(parse-morse body))
       (parse-morse (car body))))
+
+
+;;; And now a read macro for the real morsy (is that a word, morsy? Now it is)
+;;; experience!
+
+(defvar *org-readtable* nil)
+
+;;; It's really tempting to name this macro starting with an m,
+;;; making it impossible to invoke without morsing.
+;;; The disable macro is defined first because the the morse mode
+;;; supports disabling it.
+(defmacro disable-morse-mode ()
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (setq *readtable* *org-readtable*)
+     'chicken!))
+
+(defun make-morse-reader (morse-word end-symbol)
+  (let ((morse-symb (intern (subseq morse-word 1)))
+        (end-symb (and end-symbol (intern (reverse morse-word)))))
+    (lambda (stream char)
+      (declare (ignore char))
+      (let ((sexp (read stream t nil t)))
+        (if (and (symbolp sexp)
+                 (eq sexp morse-symb))
+            `(progn ,@(let ((forms nil))
+                           (awhile (read stream nil nil t)
+                             (cond
+                               ((eq it end-symb)
+                                (push (disable-morse-mode) forms)
+                                (return))
+                               (t (push (parse-morse it) forms))))
+                           (nreverse forms)))
+            (parse-morse sexp))))))
+
+(defun enable-morse-mode-fn (morse-word end-symbol)
+  (if morse-word
+      `(eval-when (:compile-toplevel :load-toplevel :execute)
+         ;; Make it possible to turn off.
+         (setq *org-readtable* *readtable*)
+         ;; Make local for this file. Cf. https://lisper.in/reader-macros
+         (setq *readtable* (copy-readtable))
+         (set-macro-character (char ,morse-word 0)
+                              (make-morse-reader ,morse-word ,end-symbol)))
+      `(progn
+         ,(enable-morse-mode-fn "MORSE" end-symbol)
+         ,(enable-morse-mode-fn "morse" end-symbol))))
+
+(defmacro enable-morse-mode (&optional morse-word end-symb)
+  (enable-morse-mode-fn morse-word end-symb))
+
+
+;;; ASCII to morse. Of course, you don't need these in practice, do you?
 
 (defparameter *ascii2morse*
   (let ((tbl (make-hash-table)))
