@@ -1,4 +1,7 @@
 ;;; === Utilities from Paul Graham, On Lisp ===
+(defun mklist (obj)
+  (if (listp obj) obj (list obj)))
+
 (eval-when (:compile-toplevel) ; used in macro for *morse2ascii*
   (defun group (source n)
     (if (zerop n) (error "zero length"))
@@ -12,12 +15,27 @@
 (defmacro aif (test-form then-form &optional else-form)
   `(let ((it ,test-form))
      (if it ,then-form ,else-form)))
-
-(defmacro awhile (expr &body body)
-  `(do ((it ,expr ,expr))
-       ((not it))
-     ,@body))
 ;;; ===========================================
+
+;;; General utilities
+
+(defmacro loopr (parms &body body)
+  "Clojure-like tail recursion"
+  (let ((parms-lst (mapcar #'mklist parms)))
+    `(labels ((recur ,(mapcar #'car parms-lst)
+                ,@body))
+       (recur ,@(mapcar #'cadr parms-lst)))))
+
+;;; While map can be used as a mapcar on sequences, it seems that the
+;;; same does not exist for mapcan etc.
+(defun map-seq (type map-fn fn seq)
+  (coerce
+   (funcall map-fn fn (coerce seq 'list))
+   type))
+
+;;; Morse
+
+(defparameter *char-delim* #\_)
 
 (defparameter *morse2ascii*
   (let ((tbl (make-hash-table :test 'equal)))
@@ -97,30 +115,29 @@
 
 (defun string-from-morse (m-str)
   (coerce
-   (labels ((f (lst cur-ch-acc acc)
-               ;; Possibly add current chars to accumulation after word end.
-               (flet ((acc-cur-ch ()
-                                  (if cur-ch-acc
-                                    (let ((m (coerce
-                                              (nreverse cur-ch-acc) 'string)))
-                                      (cons
-                                       (aif (char-from-morse m)
-                                            it
-                                            ;; Unknown morse code.
-                                            ;; Return nil and the unkown code
-                                            (return-from string-from-morse
-                                                         (values nil m)))
-                                       acc))
-                                    acc)))
-                     (if lst
-                       (let ((part (car lst))
-                             (rest (cdr lst)))
-                         (case part
-                           (#\space (f rest nil (cons #\space (acc-cur-ch))))
-                           (#\_ (f rest nil (acc-cur-ch)))
-                           (t (f rest (cons part cur-ch-acc) acc))))
-                       (nreverse (acc-cur-ch))))))
-     (f (coerce m-str 'list) nil nil))
+   (loopr ((lst (coerce m-str 'list)) cur-ch-acc acc)
+      ;; Possibly add current chars to accumulation after word end.
+      (flet ((acc-cur-ch ()
+               (if cur-ch-acc
+                   (let ((m (coerce
+                             (nreverse cur-ch-acc) 'string)))
+                     (cons
+                      (aif (char-from-morse m)
+                           it
+                           ;; Unknown morse code.
+                           ;; Return nil and the unkown code
+                           (return-from string-from-morse
+                             (values nil m)))
+                      acc))
+                   acc)))
+        (if lst
+            (let ((part (car lst))
+                  (rest (cdr lst)))
+              (case part
+                (#\space (recur rest nil (cons #\space (acc-cur-ch))))
+                (#\_ (recur rest nil (acc-cur-ch)))
+                (t (recur rest (cons part cur-ch-acc) acc))))
+            (nreverse (acc-cur-ch)))))
    'string))
 
 (defun number-from-morse (m-str)
@@ -152,53 +169,78 @@
       (parse-morse (car body))))
 
 
-;;; And now a read macro for the real morsy (is that a word, morsy? Now it is)
-;;; experience!
-
-(defvar *org-readtable* nil)
-
-;;; It's really tempting to name this macro starting with an m,
-;;; making it impossible to invoke without morsing.
-;;; The disable macro is defined first because the the morse mode
-;;; supports disabling it.
-(defmacro disable-morse-mode ()
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (setq *readtable* *org-readtable*)
-     'chicken!))
-
-(defun make-morse-reader (morse-word end-symbol)
-  (let ((morse-symb (intern (subseq morse-word 1)))
-        (end-symb (and end-symbol (intern (reverse morse-word)))))
-    (lambda (stream char)
-      (declare (ignore char))
+;;; And now a reader macro for the real morsy (is that a word, morsy?
+;;; now it is) experience!
+;;; The start and end signals are chosen according to
+;;; http://www.morsecode.nl/ITU-R-M%201677-International-Morse-code.pdf
+(defun make-morse-reader (morse-word &optional end-symb)
+  (let ((morse-symb (intern (subseq (string-upcase morse-word) 1))))
+    ;; char parameters are optional to support both single and dispatching
+    ;; macro characters as well as debugging without specifying any char.
+    (lambda (stream &optional char char2)
+      (declare (ignore char char2))
       (let ((sexp (read stream t nil t)))
         (if (and (symbolp sexp)
                  (eq sexp morse-symb))
-            `(progn ,@(let ((forms nil))
-                           (awhile (read stream nil nil t)
-                             (cond
-                               ((eq it end-symb)
-                                (push (disable-morse-mode) forms)
-                                (return))
-                               (t (push (parse-morse it) forms))))
-                           (nreverse forms)))
+            `(progn ,@(loopr (forms-acc)
+                         (let ((sexp (read stream nil nil t)))
+                           (if (or (null sexp)
+                                   (eq sexp end-symb))
+                               (nreverse forms-acc)
+                               (recur (cons (parse-morse sexp)
+                                            forms-acc))))))
             (parse-morse sexp))))))
 
-(defun enable-morse-mode-fn (morse-word end-symbol)
-  (if morse-word
-      `(eval-when (:compile-toplevel :load-toplevel :execute)
-         ;; Make it possible to turn off.
-         (setq *org-readtable* *readtable*)
-         ;; Make local for this file. Cf. https://lisper.in/reader-macros
-         (setq *readtable* (copy-readtable))
-         (set-macro-character (char ,morse-word 0)
-                              (make-morse-reader ,morse-word ,end-symbol)))
-      `(progn
-         ,(enable-morse-mode-fn "MORSE" end-symbol)
-         ,(enable-morse-mode-fn "morse" end-symbol))))
+(defun enable-morse-mode-fn (morse-word end-symb)
+  "Helper for enable-morse-fn macro"
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     ;; Only run when the first macro character is set.
+     (when (null *org-readtable*)
+       ;; Make it possible to turn off.
+       (setq *org-readtable* *readtable*)
+       ;; Make local for this file. Cf. https://lisper.in/reader-macros
+       (setq *readtable* (copy-readtable)))
+     ,(let ((1st-char (char morse-word 0))
+            (reader (make-morse-reader morse-word end-symb)))
+           (if (eql 1st-char #\#)
+               `(set-dispatch-macro-character #\# ,(char morse-word 1)
+                                              ,reader)
+               `(set-macro-character ,1st-char
+                                     ,reader)))))
 
-(defmacro enable-morse-mode (&optional morse-word end-symb)
-  (enable-morse-mode-fn morse-word end-symb))
+;;; The first character of morse-word will be the macro character,
+;;; interpreting the next sexp as morse. The first character is thus
+;;; case sensitive.
+;;; If # is the first character, a dispatch macro character is made.
+;;; If the full morse-word is written, sexps are interpreted as morse
+;;; until EOF or end-symb is encountered.
+;;; End-symb will be the "end of work" morse code by default.
+;;; The terminator code of single telegrams (.-.-.) is not used
+;;; because it is also the code for +.
+;;; Morse-word and end-symb are converted to upper-case before being
+;;; converted to symbols and are thus not case-sensitive.
+;;; If morse-word is only a single character, full morse mode will
+;;; still be available by wring e.g. M||.
+;;; If morse-word is not provided, both MORSE and morse will be used.
+(defmacro enable-morse-mode (&optional morse-word (end-symb '...-.-))
+  "Enable morse reader macro"
+  (cond
+    (morse-word (enable-morse-mode-fn morse-word end-symb))
+    (t `(progn
+          ;; Allow MORSE, morse, Morse, mOrsE etc.
+         ,(enable-morse-mode-fn "MORSE" end-symb)
+         ,(enable-morse-mode-fn "morse" end-symb)))))
+
+(defvar *org-readtable* nil)
+
+;;; The name includes m's, when using default morse mode it has to
+;;; be called as:
+;;; m(-.._.._..._.-_-..._.-.._._-....-_--_---_.-._..._._-....-_--_---_-.._.)
+(defmacro disable-morse-mode ()
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (setq *readtable* *org-readtable*)
+     (setq *org-readtable* nil)
+     'chicken!))
 
 
 ;;; ASCII to morse. Of course, you don't need these in practice, do you?
@@ -215,44 +257,65 @@
 (defun char-to-morse (ch)
   (gethash (char-upcase ch) *ascii2morse*))
 
-(defgeneric to-morse (x))
-
-;;; All methods return nil on unsupported characters and types.
-(defmethod to-morse ((x t))
-  nil)
-
-(defmethod to-morse ((x character))
-  (aif (char-to-morse x)
-       (intern (concatenate 'string "C" it))))
-
-(defmethod to-morse ((x string))
-  (apply #'concatenate
-    (cons 'string
-          (labels ((f (lst in-word acc)
-                      (if lst
+(defun string-to-morse (x &optional char-delim)
+  (let ((char-delim-str (coerce (list (or char-delim
+                                          *char-delim*))
+                                'string))
+        (char-lst (coerce x 'list)))
+    (apply #'concatenate
+           (cons 'string
+                 (loopr ((lst char-lst) in-word acc)
+                    (if lst
                         (let ((ch (car lst))
                               (rest (cdr lst)))
                           (if (eql ch #\space)
-                            (f rest nil (cons " " acc))
-                            (aif (char-to-morse ch)
-                                 (if in-word
-                                   (f rest t (list* it "_" acc))
-                                   (f rest t (cons it acc)))
-                                 (return-from to-morse nil))))
-                        (nreverse acc))))
-            (f (coerce x 'list) nil nil)))))
+                              (recur rest nil (cons " " acc))
+                              (aif (char-to-morse ch)
+                                   (if in-word
+                                       (recur rest t
+                                              (list* it char-delim-str acc))
+                                       (recur rest t
+                                              (cons it acc)))
+                                   (return-from string-to-morse nil))))
+                        (nreverse acc)))))))
 
-(defmethod to-morse ((x number))
-  (aif (to-morse (write-to-string x))
+(defgeneric to-morse (x &optional char-delim))
+
+(defmacro def-to-morse-method ((type) &body body)
+  (labels ((normalize-to-morse-call (body)
+             (if (consp body)
+                 (if (member (car body) '(to-morse string-to-morse))
+                     (append body '(char-delim))
+                     (mapcar #'normalize-to-morse-call body))
+                 body)))
+    (let ((bodyn (mapcar #'normalize-to-morse-call body)))
+      `(defmethod to-morse ((x ,type) &optional char-delim)
+         ,@(if (equal body bodyn)
+               (cons '(declare (ignore char-delim)) body)
+               bodyn)))))
+
+;;; All methods return nil on unsupported characters and types.
+(def-to-morse-method (t)
+  nil)
+
+(def-to-morse-method (character)
+  (aif (char-to-morse x)
+       (intern (concatenate 'string "C" it))))
+
+(def-to-morse-method (string)
+  (string-to-morse x))
+
+(def-to-morse-method (number)
+  (aif (string-to-morse (write-to-string x))
        (intern (concatenate 'string "N" it))))
 
-(defmethod to-morse ((x symbol))
-  (aif (to-morse (string-upcase (symbol-name x)))
+(def-to-morse-method (symbol)
+  (aif (string-to-morse (string-upcase (symbol-name x)))
        (intern it)))
 
 ;;; Notice that the type of NIL is symbol, not (empty) list.
 ;;; Thus, NIL will be converted correctly.
-(defmethod to-morse ((x list))
+(def-to-morse-method (list)
   (mapcar (lambda (y)
             (aif (to-morse y)
                  it
@@ -264,3 +327,32 @@
   `(values ,@(mapcar (lambda (expr)
                        `(quote ,(to-morse expr)))
                      body)))
+
+;;; And finally some "normal" converters
+(defun string->morse (str &optional (word-sep-n 2))
+  (let ((word-sep-lst (loop repeat word-sep-n
+                         collecting #\space)))
+    (map-seq 'string
+             #'mapcan
+             (lambda (ch)
+               (case ch
+                 (#\space (copy-list word-sep-lst))
+                 (#\_ (list #\space))
+                 (otherwise (list ch))))
+             (string-to-morse str #\_))))
+
+(defun morse->string (str)
+  (string-from-morse
+   (map-seq 'string
+            #'mapcon
+            (lambda (lst)
+              (if (eql (first lst) #\space)
+                  ;; Look ahead. One space means character separation,
+                  ;; multiple mean word separation and should be
+                  ;; replaced with only one space.
+                  (if (eql (second lst) #\space)
+                      (unless (eql (third lst) #\space)
+                        (list #\space))
+                      (list #\_))
+                  (list (first lst))))
+            str)))
