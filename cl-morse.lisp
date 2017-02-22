@@ -1,16 +1,16 @@
 ;;; === Utilities from Paul Graham, On Lisp ===
-(defun mklist (obj)
-  (if (listp obj) obj (list obj)))
+(eval-when (:compile-toplevel :load-toplevel :execute) ; usen in macro
+  (defun mklist (obj)
+    (if (listp obj) obj (list obj))))
 
-(eval-when (:compile-toplevel) ; used in macro for *morse2ascii*
-  (defun group (source n)
-    (if (zerop n) (error "zero length"))
-    (labels ((rec (source acc)
-               (let ((rest (nthcdr n source)))
-                 (if (consp rest)
-                     (rec rest (cons (subseq source 0 n) acc))
-                     (nreverse (cons source acc))))))
-      (if source (rec source nil) nil))))
+(defun group (source n)
+  (if (zerop n) (error "zero length"))
+  (labels ((rec (source acc)
+             (let ((rest (nthcdr n source)))
+               (if (consp rest)
+                   (rec rest (cons (subseq source 0 n) acc))
+                   (nreverse (cons source acc))))))
+    (if source (rec source nil) nil)))
 
 (defmacro aif (test-form then-form &optional else-form)
   `(let ((it ,test-form))
@@ -33,9 +33,16 @@
    (funcall map-fn fn (coerce seq 'list))
    type))
 
+(defun char->string (ch)
+  (coerce (list ch) 'string))
+
 ;;; Morse
 
-(defparameter *char-delim* #\_)
+(defconstant +default-char-delim+ #\_)
+(defconstant +default-word-delim-n+ 2)
+(defconstant +default-word-delim+ #\Space)
+(defvar +default-word-delim-str+
+  (make-string +default-word-delim-n+ :initial-element +default-word-delim+))
 
 (defparameter *morse2ascii*
   (let ((tbl (make-hash-table :test 'equal)))
@@ -106,37 +113,53 @@
        #\@ ".--.-."
        #\newline ".-.-" ; http://morsecode.scphillips.com/morse2.html
        #\* "..-.." ; okay, I made this one up
-       #\space " " ; for lookup when converting char
+       #\Space " " ; for lookup when converting char
        )
       tbl)))
 
 (defun char-from-morse (m-str)
   (gethash m-str *morse2ascii*))
 
+(defun morse-char-p (ch)
+  (or (eql ch #\.)
+      (eql ch #\-)))
+
+;;; One space is added when multiple separators are encountered. It is
+;;; thus possible to add one leading and trailing space.
 (defun string-from-morse (m-str)
   (coerce
-   (loopr ((lst (coerce m-str 'list)) cur-ch-acc acc)
-      ;; Possibly add current chars to accumulation after word end.
+   (loopr ((lst (coerce m-str 'list))
+           (in-sep? nil) (in-word-delim? nil) ; in separator?
+           cur-ch-acc acc) ; current char accumulator and accumulator
       (flet ((acc-cur-ch ()
+               ;; If any morse characters are acummulated, translate
+               ;; character and add to accumulator. Return accumulator.
                (if cur-ch-acc
-                   (let ((m (coerce
-                             (nreverse cur-ch-acc) 'string)))
-                     (cons
-                      (aif (char-from-morse m)
-                           it
-                           ;; Unknown morse code.
-                           ;; Return nil and the unkown code
-                           (return-from string-from-morse
-                             (values nil m)))
-                      acc))
+                   (let* ((m (coerce (nreverse cur-ch-acc) 'string))
+                          (ch (char-from-morse m)))
+                     (if ch
+                         (cons ch acc)
+                         ;; Unknown morse code.
+                         ;; Return nil and the unkown code
+                         (return-from string-from-morse
+                           (values nil m))))
                    acc)))
         (if lst
             (let ((part (car lst))
                   (rest (cdr lst)))
-              (case part
-                (#\space (recur rest nil (cons #\space (acc-cur-ch))))
-                (#\_ (recur rest nil (acc-cur-ch)))
-                (t (recur rest (cons part cur-ch-acc) acc))))
+              (if (morse-char-p part) 
+                  ;; Part of character
+                  (recur rest nil nil (cons part cur-ch-acc) acc)
+                  (if (not in-sep?)
+                      ;; End of character
+                      (recur rest t nil nil (acc-cur-ch))
+                      (if (not in-word-delim?)
+                          ;; Multiple separators (end of word): add space
+                          (recur rest t t nil (cons #\Space acc))
+                          ;; Space already added (word separator is of
+                          ;; arbitrary length)
+                          (recur rest t t nil acc)))))
+            ;; End of string. Add final acummulated morse characters.
             (nreverse (acc-cur-ch)))))
    'string))
 
@@ -171,8 +194,6 @@
 
 ;;; And now a reader macro for the real morsy (is that a word, morsy?
 ;;; now it is) experience!
-;;; The start and end signals are chosen according to
-;;; http://www.morsecode.nl/ITU-R-M%201677-International-Morse-code.pdf
 (defun make-morse-reader (morse-word &optional end-symb)
   (let ((morse-symb (intern (subseq (string-upcase morse-word) 1))))
     ;; char parameters are optional to support both single and dispatching
@@ -197,9 +218,9 @@
      ;; Only run when the first macro character is set.
      (when (null *org-readtable*)
        ;; Make it possible to turn off.
-       (setq *org-readtable* *readtable*)
+       (setf *org-readtable* *readtable*)
        ;; Make local for this file. Cf. https://lisper.in/reader-macros
-       (setq *readtable* (copy-readtable)))
+       (setf *readtable* (copy-readtable)))
      ,(let ((1st-char (char morse-word 0))
             (reader (make-morse-reader morse-word end-symb)))
            (if (eql 1st-char #\#)
@@ -217,6 +238,8 @@
 ;;; End-symb will be the "end of work" morse code by default.
 ;;; The terminator code of single telegrams (.-.-.) is not used
 ;;; because it is also the code for +.
+;;; Cf.
+;;; http://www.morsecode.nl/ITU-R-M%201677-International-Morse-code.pdf
 ;;; Morse-word and end-symb are converted to upper-case before being
 ;;; converted to symbols and are thus not case-sensitive.
 ;;; If morse-word is only a single character, full morse mode will
@@ -238,8 +261,8 @@
 ;;; m(-.._.._..._.-_-..._.-.._._-....-_--_---_.-._..._._-....-_--_---_-.._.)
 (defmacro disable-morse-mode ()
   `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (setq *readtable* *org-readtable*)
-     (setq *org-readtable* nil)
+     (setf *readtable* *org-readtable*)
+     (setf *org-readtable* nil)
      'chicken!))
 
 
@@ -247,52 +270,55 @@
 
 (defparameter *ascii2morse*
   (let ((tbl (make-hash-table)))
-    (with-hash-table-iterator (generator-fn *morse2ascii*)
-      (loop
-        (multiple-value-bind (any? key value) (generator-fn)
-          (unless any? (return))
-          (setf (gethash value tbl) key))))
+    (maphash (lambda (key val)
+               (setf (gethash val tbl) key))
+             *morse2ascii*)
     tbl))
 
 (defun char-to-morse (ch)
   (gethash (char-upcase ch) *ascii2morse*))
 
-(defun string-to-morse (x &optional char-delim)
-  (let ((char-delim-str (coerce (list (or char-delim
-                                          *char-delim*))
-                                'string))
+(defun string-to-morse (x char-delim word-delim-str)
+  (let ((char-delim-str (char->string char-delim))
         (char-lst (coerce x 'list)))
-    (apply #'concatenate
-           (cons 'string
-                 (loopr ((lst char-lst) in-word acc)
-                    (if lst
-                        (let ((ch (car lst))
-                              (rest (cdr lst)))
-                          (if (eql ch #\space)
-                              (recur rest nil (cons " " acc))
-                              (aif (char-to-morse ch)
-                                   (if in-word
-                                       (recur rest t
-                                              (list* it char-delim-str acc))
-                                       (recur rest t
-                                              (cons it acc)))
-                                   (return-from string-to-morse nil))))
-                        (nreverse acc)))))))
+    (let ((str-parts
+           (loopr ((lst char-lst) in-word acc)
+              (if lst
+                  (let ((ch (car lst))
+                        (rest (cdr lst)))
+                    (if (eql ch #\Space)
+                        (recur rest nil (cons word-delim-str acc))
+                        (aif (char-to-morse ch)
+                             (if in-word
+                                 (recur rest t
+                                        (list* it char-delim-str acc))
+                                 (recur rest t
+                                        (cons it acc)))
+                             (return-from string-to-morse nil))))
+                  (nreverse acc)))))
+      (apply #'concatenate (cons 'string str-parts)))))
 
-(defgeneric to-morse (x &optional char-delim))
+(defgeneric to-morse (x &optional char-delim word-delim-str))
 
 (defmacro def-to-morse-method ((type) &body body)
-  (labels ((normalize-to-morse-call (body)
-             (if (consp body)
-                 (if (member (car body) '(to-morse string-to-morse))
-                     (append body '(char-delim))
-                     (mapcar #'normalize-to-morse-call body))
-                 body)))
-    (let ((bodyn (mapcar #'normalize-to-morse-call body)))
-      `(defmethod to-morse ((x ,type) &optional char-delim)
-         ,@(if (equal body bodyn)
-               (cons '(declare (ignore char-delim)) body)
-               bodyn)))))
+  (let ((recursive? nil) ; set if normalize-to-morse-call does anything
+        (to-morse-fns '(to-morse string-to-morse)))
+    (labels ((normalize-to-morse-call (sexp)
+               (if (consp sexp)
+                   (cond
+                     ((member (car sexp) to-morse-fns)
+                      (setf recursive? t)
+                      (append sexp '(char-delim word-delim-str)))
+                     (t (mapcar #'normalize-to-morse-call sexp)))
+                   sexp)))
+      (let ((bodyn (mapcar #'normalize-to-morse-call body)))
+        `(defmethod to-morse ((x ,type)
+                              &optional
+                                (char-delim +default-char-delim+)
+                                (word-delim-str +default-word-delim-str+))
+           ,@(if recursive?
+                 bodyn
+                 (cons '(declare (ignore char-delim word-delim-str)) body)))))))
 
 ;;; All methods return nil on unsupported characters and types.
 (def-to-morse-method (t)
@@ -323,36 +349,22 @@
           x))
 
 ;;; For convenience, instead of using (to-morse '<expr>) on each expression.
-(defmacro morsify (&body body)
+(defmacro morsify-with ((char-delim
+                         &optional (word-delim-str +default-word-delim-str+))
+                        &body body)
   `(values ,@(mapcar (lambda (expr)
-                       `(quote ,(to-morse expr)))
+                       `',(to-morse expr char-delim word-delim-str))
                      body)))
 
-;;; And finally some "normal" converters
-(defun string->morse (str &optional (word-sep-n 2))
-  (let ((word-sep-lst (loop repeat word-sep-n
-                         collecting #\space)))
-    (map-seq 'string
-             #'mapcan
-             (lambda (ch)
-               (case ch
-                 (#\space (copy-list word-sep-lst))
-                 (#\_ (list #\space))
-                 (otherwise (list ch))))
-             (string-to-morse str #\_))))
+;;; Shorthand for calling morsify-with with default values.
+(defmacro morsify (&body body)
+  `(morsify-with (,+default-char-delim+) ,@body))
+
+;;; And finally some "normal" converters for everyday use.
+(defun string->morse (str &optional (word-delim-n +default-word-delim-n+))
+  (string-to-morse str
+                   #\Space
+                   (make-string word-delim-n :initial-element #\Space)))
 
 (defun morse->string (str)
-  (string-from-morse
-   (map-seq 'string
-            #'mapcon
-            (lambda (lst)
-              (if (eql (first lst) #\space)
-                  ;; Look ahead. One space means character separation,
-                  ;; multiple mean word separation and should be
-                  ;; replaced with only one space.
-                  (if (eql (second lst) #\space)
-                      (unless (eql (third lst) #\space)
-                        (list #\space))
-                      (list #\_))
-                  (list (first lst))))
-            str)))
+  (string-from-morse str))
