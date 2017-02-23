@@ -38,7 +38,7 @@
 
 ;;; Morse
 
-(defconstant +default-char-delim+ #\_)
+(defconstant +default-char-delim+ #\=)
 (defconstant +default-word-delim-n+ 2)
 (defconstant +default-word-delim+ #\Space)
 (defvar +default-word-delim-str+
