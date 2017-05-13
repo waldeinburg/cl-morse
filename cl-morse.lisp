@@ -1,5 +1,5 @@
 ;;; === Utilities from Paul Graham, On Lisp ===
-(eval-when (:compile-toplevel :load-toplevel :execute) ; usen in macro
+(eval-when (:compile-toplevel :load-toplevel :execute) ; used in macro
   (defun mklist (obj)
     (if (listp obj) obj (list obj))))
 
@@ -124,44 +124,49 @@
   (or (eql ch #\.)
       (eql ch #\-)))
 
+;;; Really just a helper for string-from-morse
 ;;; One space is added when multiple separators are encountered. It is
 ;;; thus possible to add one leading and trailing space.
+(defun char-lst-from-morse (m-str)
+  (loopr ((lst (coerce m-str 'list))
+          (in-sep? nil) (in-word-delim? nil) ; in separator?
+          cur-ch-acc acc) ; current char accumulator and accumulator
+     (flet ((acc-cur-ch ()
+              ;; If any morse characters are acummulated, translate
+              ;; character and add to accumulator. Return accumulator.
+              (if cur-ch-acc
+                  (let* ((m (coerce (nreverse cur-ch-acc) 'string))
+                         (ch (char-from-morse m)))
+                    (if ch
+                        (cons ch acc)
+                        ;; Unknown morse code.
+                        ;; Return nil and the unkown code
+                        (return-from char-lst-from-morse
+                          (values nil m))))
+                  acc)))
+       (if lst
+           (let ((part (car lst))
+                 (rest (cdr lst)))
+             (if (morse-char-p part) 
+                 ;; Part of character
+                 (recur rest nil nil (cons part cur-ch-acc) acc)
+                 (if (not in-sep?)
+                     ;; End of character
+                     (recur rest t nil nil (acc-cur-ch))
+                     (if (not in-word-delim?)
+                         ;; Multiple separators (end of word): add space
+                         (recur rest t t nil (cons #\Space acc))
+                         ;; Space already added (word separator is of
+                         ;; arbitrary length)
+                         (recur rest t t nil acc)))))
+           ;; End of string. Add final acummulated morse characters.
+           (nreverse (acc-cur-ch))))))
+
 (defun string-from-morse (m-str)
-  (coerce
-   (loopr ((lst (coerce m-str 'list))
-           (in-sep? nil) (in-word-delim? nil) ; in separator?
-           cur-ch-acc acc) ; current char accumulator and accumulator
-      (flet ((acc-cur-ch ()
-               ;; If any morse characters are acummulated, translate
-               ;; character and add to accumulator. Return accumulator.
-               (if cur-ch-acc
-                   (let* ((m (coerce (nreverse cur-ch-acc) 'string))
-                          (ch (char-from-morse m)))
-                     (if ch
-                         (cons ch acc)
-                         ;; Unknown morse code.
-                         ;; Return nil and the unkown code
-                         (return-from string-from-morse
-                           (values nil m))))
-                   acc)))
-        (if lst
-            (let ((part (car lst))
-                  (rest (cdr lst)))
-              (if (morse-char-p part) 
-                  ;; Part of character
-                  (recur rest nil nil (cons part cur-ch-acc) acc)
-                  (if (not in-sep?)
-                      ;; End of character
-                      (recur rest t nil nil (acc-cur-ch))
-                      (if (not in-word-delim?)
-                          ;; Multiple separators (end of word): add space
-                          (recur rest t t nil (cons #\Space acc))
-                          ;; Space already added (word separator is of
-                          ;; arbitrary length)
-                          (recur rest t t nil acc)))))
-            ;; End of string. Add final acummulated morse characters.
-            (nreverse (acc-cur-ch)))))
-   'string))
+  (multiple-value-bind (result error) (char-lst-from-morse m-str)
+    (if result
+        (coerce result 'string)
+        (values nil error))))
 
 (defun number-from-morse (m-str)
   (aif (string-from-morse m-str)
@@ -194,25 +199,30 @@
 
 ;;; And now a reader macro for the real morsy (is that a word, morsy?
 ;;; now it is) experience!
-(defun make-morse-reader (morse-word &optional end-symb)
-  (let ((morse-symb (intern (subseq (string-upcase morse-word) 1))))
+(defun make-morse-reader (morse-word
+                          &optional
+                            (end-sym (gensym)) ; do not end on nil by default
+                            (recursive-p t))   ; for debugging
+  (let ((morse-sym (intern (string-upcase (subseq morse-word 1))))
+        (eof-sym (gensym)))
     ;; char parameters are optional to support both single and dispatching
     ;; macro characters as well as debugging without specifying any char.
     (lambda (stream &optional char char2)
       (declare (ignore char char2))
-      (let ((sexp (read stream t nil t)))
-        (if (and (symbolp sexp)
-                 (eq sexp morse-symb))
-            `(progn ,@(loopr (forms-acc)
-                         (let ((sexp (read stream nil nil t)))
-                           (if (or (null sexp)
-                                   (eq sexp end-symb))
-                               (nreverse forms-acc)
-                               (recur (cons (parse-morse sexp)
-                                            forms-acc))))))
+      (let ((sexp (read stream t nil recursive-p)))
+        (if (eq sexp morse-sym)
+            `(progn ,@(loop
+                         for sexp = (read stream nil eof-sym
+                                          ;; recursive-p t seems most correct,
+                                          ;; but CLISP fails with simple-end-of-file
+                                          #-clisp t
+                                          #+clisp nil)
+                         until (or (eq sexp eof-sym)
+                                   (eq sexp end-sym))
+                         collect (parse-morse sexp)))
             (parse-morse sexp))))))
 
-(defun enable-morse-mode-fn (morse-word end-symb)
+(defun enable-morse-mode-fn (morse-word end-sym)
   "Helper for enable-morse-fn macro"
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      ;; Only run when the first macro character is set.
@@ -222,7 +232,7 @@
        ;; Make local for this file. Cf. https://lisper.in/reader-macros
        (setf *readtable* (copy-readtable)))
      ,(let ((1st-char (char morse-word 0))
-            (reader (make-morse-reader morse-word end-symb)))
+            (reader (make-morse-reader morse-word end-sym)))
            (if (eql 1st-char #\#)
                `(set-dispatch-macro-character #\# ,(char morse-word 1)
                                               ,reader)
@@ -234,25 +244,25 @@
 ;;; case sensitive.
 ;;; If # is the first character, a dispatch macro character is made.
 ;;; If the full morse-word is written, sexps are interpreted as morse
-;;; until EOF or end-symb is encountered.
-;;; End-symb will be the "end of work" morse code by default.
+;;; until EOF or end-sym is encountered.
+;;; End-sym will be the "end of work" morse code by default.
 ;;; The terminator code of single telegrams (.-.-.) is not used
 ;;; because it is also the code for +.
 ;;; Cf.
 ;;; http://www.morsecode.nl/ITU-R-M%201677-International-Morse-code.pdf
-;;; Morse-word and end-symb are converted to upper-case before being
+;;; Morse-word and end-sym are converted to upper-case before being
 ;;; converted to symbols and are thus not case-sensitive.
 ;;; If morse-word is only a single character, full morse mode will
 ;;; still be available by wring e.g. M||.
 ;;; If morse-word is not provided, both MORSE and morse will be used.
-(defmacro enable-morse-mode (&optional morse-word (end-symb '...-.-))
+(defmacro enable-morse-mode (&optional morse-word (end-sym '...-.-))
   "Enable morse reader macro"
-  (cond
-    (morse-word (enable-morse-mode-fn morse-word end-symb))
-    (t `(progn
-          ;; Allow MORSE, morse, Morse, mOrsE etc.
-         ,(enable-morse-mode-fn "MORSE" end-symb)
-         ,(enable-morse-mode-fn "morse" end-symb)))))
+  (if morse-word
+      (enable-morse-mode-fn morse-word end-sym)
+      `(progn
+         ;; Allow MORSE, morse, Morse, mOrsE etc.
+         ,(enable-morse-mode-fn "MORSE" end-sym)
+         ,(enable-morse-mode-fn "morse" end-sym))))
 
 (defvar *org-readtable* nil)
 
