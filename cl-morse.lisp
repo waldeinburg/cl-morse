@@ -1,3 +1,5 @@
+(in-package #:dk.waldeinburg.cl-morse)
+
 ;;; === Utilities from Paul Graham, On Lisp ===
 (eval-when (:compile-toplevel :load-toplevel :execute) ; used in macro
   (defun mklist (obj)
