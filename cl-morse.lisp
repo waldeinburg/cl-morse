@@ -233,13 +233,14 @@
        (setf *org-readtable* *readtable*)
        ;; Make local for this file. Cf. https://lisper.in/reader-macros
        (setf *readtable* (copy-readtable)))
-     ,(let ((1st-char (char morse-word 0))
-            (reader (make-morse-reader morse-word end-sym)))
+     ,(let ((1st-char (char morse-word 0)))
            (if (eql 1st-char #\#)
                `(set-dispatch-macro-character #\# ,(char morse-word 1)
-                                              ,reader)
+                                              ,(make-morse-reader
+                                                (subseq morse-word 1)
+                                                end-sym))
                `(set-macro-character ,1st-char
-                                     ,reader)))))
+                                     ,(make-morse-reader morse-word end-sym))))))
 
 ;;; The first character of morse-word will be the macro character,
 ;;; interpreting the next sexp as morse. The first character is thus
