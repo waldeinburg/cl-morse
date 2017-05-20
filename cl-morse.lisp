@@ -248,7 +248,9 @@
 ;;; If # is the first character, a dispatch macro character is made.
 ;;; If the full morse-word is written, sexps are interpreted as morse
 ;;; until EOF or end-sym is encountered.
-;;; End-sym will be the "end of work" morse code by default.
+;;; End-sym will be the "end of work" morse code by default. The
+;;; symbol is exported but if the package is not used one have to
+;;; specify end-sym manually (or write cl-morse:...-.-).
 ;;; The terminator code of single telegrams (.-.-.) is not used
 ;;; because it is also the code for +.
 ;;; Cf.

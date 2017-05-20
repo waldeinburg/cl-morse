@@ -6,6 +6,7 @@
   (:export #:parse-morse
            #:morse-code
            #:enable-morse-mode
+           #:...-.-
            #:disable-morse-mode
            #:to-morse
            #:morsify-with
