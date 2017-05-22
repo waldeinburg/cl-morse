@@ -278,7 +278,7 @@
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (setf *readtable* *org-readtable*)
      (setf *org-readtable* nil)
-     'chicken!))
+     '|-.-. .... .. -.-. -.- . -. -.-.--|))
 
 
 ;;; ASCII to morse. Of course, you don't need these in practice, do you?
