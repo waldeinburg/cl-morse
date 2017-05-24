@@ -8,6 +8,6 @@
   :version "0.1"
   :description "Morse support"
   :author "Daniel Lundsgaard Skovenborg <waldeinburg@gmail.com>"
-  :licence "BSD"
+  :licence "MIT"
   :components ((:file "packages")
                (:file "cl-morse")))
