@@ -201,6 +201,8 @@
 
 ;;; And now a reader macro for the real morsy (is that a word, morsy?
 ;;; now it is) experience!
+(defvar *org-readtable* nil)
+
 (defun make-morse-reader (morse-word
                           &optional
                             (end-sym (gensym)) ; do not end on nil by default
@@ -269,8 +271,6 @@
          ,(enable-morse-mode-fn "MORSE" end-sym)
          ,(enable-morse-mode-fn "morse" end-sym))))
 
-(defvar *org-readtable* nil)
-
 ;;; The name includes m's, when using default morse mode it has to
 ;;; be called as:
 ;;; m(-.._.._..._.-_-..._.-.._._-....-_--_---_.-._..._._-....-_--_---_-.._.)
@@ -309,7 +309,8 @@
                                         (list* it char-delim-str acc))
                                  (recur rest t
                                         (cons it acc)))
-                             (return-from string-to-morse nil))))
+                             (return-from string-to-morse
+                               (values nil ch))))) ; nil and char for debug
                   (nreverse acc)))))
       (apply #'concatenate (cons 'string str-parts)))))
 
